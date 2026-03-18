@@ -9,3 +9,4 @@ phowhisper_local_model
 audio/
 raw_audio
 filtered_signal.wav
+meeting.wav

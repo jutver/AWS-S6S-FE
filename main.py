@@ -5,7 +5,7 @@ import os
 
 load_dotenv(".env")
 
-file_name = "filtered_signal.wav"
+file_name = "meeting.wav"
 bucket = os.getenv("BUCKET_NAME")
 client = os.getenv("CLIENT")
 raw_bucket_folder = os.getenv("RAW_BUCKET_FOLDER")
@@ -15,7 +15,7 @@ obj_id = hash_generator.hash_key()
 object_name = f"{raw_bucket_folder}/{obj_id}"
 transcript_obj = hash_generator.hash_key()
 
-raw_controller = audio_controller.raw_audio(file_name, bucket, client, object_name, content_type='audio/mpeg')
+raw_controller = audio_controller.raw_audio(file_name, bucket, client, object_name, content_type='audio/wav')
 
 mapper = bucket_parser.HashTable(
     size=16,
