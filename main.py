@@ -5,11 +5,12 @@ import os
 
 load_dotenv(".env")
 
-file_name = "meeting.wav"
+file_name = "audio/haha.wav"
 bucket = os.getenv("BUCKET_NAME")
 client = os.getenv("CLIENT")
 raw_bucket_folder = os.getenv("RAW_BUCKET_FOLDER")
 table = os.getenv("TABLE_NAME")
+mock_user_id = "user_456"
 
 obj_id = hash_generator.hash_key()
 object_name = f"{raw_bucket_folder}/{obj_id}"
@@ -26,9 +27,13 @@ mapper.insert(obj_id, transcript_obj)
 
 raw_controller.pushing_to_bucket()
 
+user_stack = bucket_parser.UserIndex(bucket=bucket, key="user_index.json")
+user_stack.push(mock_user_id, obj_id)
+
 res = raw_controller.GetAll_bucket_fileid(f"{raw_bucket_folder}/")
 print(res)
 print("..................")
-print(mapper.table)
+print("Hash Table:", mapper.table)
+print(f"User Stack ({mock_user_id}):", user_stack.get_stack(mock_user_id))
 for k in res:
     print(mapper.get(k))
