@@ -1,0 +1,14 @@
+phowhisper_local_model\model.safetensors
+.venv
+.agent
+.vscode__pycache__/
+__pycache__
+*.pyc
+.env
+pyannote_local_model
+phowhisper_local_model
+.vscode
+raw_audio
+filtered_signal.wav
+meeting.wav
+private
