@@ -13,7 +13,3 @@ def get_model_response(message, api_key = api_key, model = model):
         api_key= api_key,
     )
     return resp.choices[0].message.content
-
-
-
-res = get_model_response([{"role": "user", "content": "Tóm tắt đoạn này thành 5 ý"}])
