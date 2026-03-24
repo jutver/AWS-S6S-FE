@@ -1,14 +1,134 @@
-import React from "react";
+import React, { useState } from "react";
+import { fetchAuthSession, getCurrentUser, signOut } from "aws-amplify/auth";
+
+const API_URL =
+  "https://f5p397ic56.execute-api.ap-southeast-1.amazonaws.com/dev/hello";
+
 import AppSidebar from "../components/AppSidebar";
 import AppTopbar from "../components/AppTopbar";
 
 export default function DashboardPage() {
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [userInfo, setUserInfo] = useState(null);
+
+  const loadCurrentUser = async () => {
+    try {
+      const user = await getCurrentUser();
+      setUserInfo(user);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const callApi = async () => {
+    setLoading(true);
+    setError("");
+    setResult(null);
+
+    try {
+      const session = await fetchAuthSession();
+
+      const idToken = session.tokens?.idToken?.toString();
+      const accessToken = session.tokens?.accessToken?.toString();
+      const token = idToken || accessToken;
+
+      if (!token) {
+        throw new Error("Không lấy được token. Hãy đăng nhập lại.");
+      }
+
+      const res = await fetch(API_URL, {
+        method: "GET",
+        headers: {
+          Authorization: token,
+          "Content-Type": "application/json",
+        },
+      });
+
+      const text = await res.text();
+      let data;
+
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { raw: text };
+      }
+
+      if (!res.ok) {
+        throw new Error(data.message || `API lỗi ${res.status}`);
+      }
+
+      setResult(data);
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "Gọi API thất bại");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut();
+    window.location.href = "/login";
+  };
+
   return (
     <div className="min-h-screen bg-[#f6f7fb] md:grid md:grid-cols-[250px_1fr]">
       <AppSidebar />
 
       <main className="p-4 md:p-7">
         <AppTopbar title="Dashboard" subtitle="Upload & Record Dash" />
+        <div className="min-h-screen bg-slate-100 p-4">
+          <div className="mx-auto max-w-3xl rounded-3xl bg-white p-6 shadow">
+            <h1 className="text-3xl font-bold text-slate-900">Dashboard</h1>
+            <p className="mt-2 text-slate-500">
+              Test Cognito + API Gateway mock
+            </p>
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button
+                onClick={loadCurrentUser}
+                className="rounded-xl bg-slate-200 px-4 py-3 font-medium text-slate-800"
+              >
+                Xem current user
+              </button>
+
+              <button
+                onClick={callApi}
+                disabled={loading}
+                className="rounded-xl bg-indigo-600 px-4 py-3 font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {loading ? "Đang gọi API..." : "Test API Gateway"}
+              </button>
+
+              <button
+                onClick={handleLogout}
+                className="rounded-xl bg-red-500 px-4 py-3 font-medium text-white hover:bg-red-600"
+              >
+                Logout
+              </button>
+            </div>
+
+            {userInfo && (
+              <pre className="mt-4 overflow-auto rounded-xl bg-slate-900 p-4 text-sm text-white">
+                {JSON.stringify(userInfo, null, 2)}
+              </pre>
+            )}
+
+            {error && (
+              <div className="mt-4 rounded-xl bg-red-50 p-4 text-red-600">
+                {error}
+              </div>
+            )}
+
+            {result && (
+              <pre className="mt-4 overflow-auto rounded-xl bg-slate-900 p-4 text-sm text-white">
+                {JSON.stringify(result, null, 2)}
+              </pre>
+            )}
+          </div>
+        </div>
 
         <div className="grid gap-6 xl:grid-cols-[1fr_300px]">
           <div>

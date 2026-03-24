@@ -1,7 +1,36 @@
-import React from "react";
-import { Link } from "react-router-dom";
+import React, { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { signIn } from "aws-amplify/auth";
 
 export default function LoginPage() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [msg, setMsg] = useState("");
+  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setMsg("");
+    setLoading(true);
+
+    try {
+      const result = await signIn({
+        username: email,
+        password,
+      });
+
+      console.log("signIn result:", result);
+      setMsg("Đăng nhập thành công");
+      navigate("/dashboard");
+    } catch (err) {
+      console.error(err);
+      setMsg(err.message || "Đăng nhập thất bại");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#f5f6fa] p-4 md:p-8">
       <div className="mx-auto grid min-h-[85vh] max-w-6xl overflow-hidden rounded-[28px] bg-white shadow-xl lg:grid-cols-[1.15fr_0.85fr]">
@@ -25,66 +54,49 @@ export default function LoginPage() {
           <div className="absolute bottom-0 left-[18%] h-[60%] w-[80%] rounded-tl-[40px] bg-[linear-gradient(180deg,rgba(30,58,138,0.25),rgba(147,197,253,0.28))]" />
         </div>
 
-        <div className="flex items-center justify-center px-6 py-10 md:px-12">
-          <div className="w-full max-w-md">
-            <h2 className="text-4xl font-black text-slate-900">Welcome Back</h2>
-            <p className="mt-2 text-slate-500">
-              Continue your auditory analysis journey.
-            </p>
+        <div className="min-h-screen bg-slate-100 p-4">
+          <div className="mx-auto mt-10 max-w-md rounded-3xl bg-white p-6 shadow">
+            <h1 className="text-3xl font-bold text-slate-900">Login</h1>
+            <p className="mt-2 text-slate-500">Đăng nhập bằng Cognito</p>
 
-            <button className="mt-8 flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white font-semibold text-slate-700">
-              <i className="bi bi-google" />
-              Google
-            </button>
+            <form onSubmit={handleLogin} className="mt-6 space-y-4">
+              <input
+                type="email"
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="h-12 w-full rounded-xl border border-slate-200 px-4 outline-none"
+              />
 
-            <div className="my-6 text-center text-xs font-bold tracking-[0.2em] text-slate-400">
-              OR CONTINUE WITH EMAIL
-            </div>
-
-            <label className="mb-2 block text-xs font-extrabold tracking-[0.12em] text-slate-500">
-              EMAIL ADDRESS
-            </label>
-            <input
-              type="email"
-              placeholder="name@company.com"
-              className="mb-5 h-12 w-full rounded-xl border border-slate-200 px-4 outline-none"
-            />
-
-            <div className="mb-2 flex items-center justify-between">
-              <label className="block text-xs font-extrabold tracking-[0.12em] text-slate-500">
-                PASSWORD
-              </label>
-              <a href="#" className="text-sm font-semibold text-indigo-600">
-                Forgot?
-              </a>
-            </div>
-
-            <div className="relative">
               <input
                 type="password"
-                placeholder="••••••••"
-                className="mb-5 h-12 w-full rounded-xl border border-slate-200 px-4 pr-10 outline-none"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="h-12 w-full rounded-xl border border-slate-200 px-4 outline-none"
               />
-              <i className="bi bi-eye absolute right-4 top-3.5 text-slate-400" />
-            </div>
 
-            <div className="mb-5">
-              <input type="checkbox" className="h-4 w-4 rounded" />
-            </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="h-12 w-full rounded-xl bg-indigo-600 font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {loading ? "Đang đăng nhập..." : "Login"}
+              </button>
+            </form>
 
-            <Link
-              to="/dashboard"
-              className="flex h-12 w-full items-center justify-center rounded-xl bg-indigo-600 font-semibold text-white shadow hover:bg-indigo-700"
-            >
-              Sign In to Sound Capture
-            </Link>
+            {msg && (
+              <div className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-600">
+                {msg}
+              </div>
+            )}
 
-            <div className="mt-6 text-center text-sm text-slate-500">
-              New to the us?
-              <a href="#" className="ml-2 font-bold text-indigo-600">
-                Create an account
-              </a>
-            </div>
+            <p className="mt-5 text-sm text-slate-500">
+              Chưa có tài khoản?{" "}
+              <Link to="/register" className="font-semibold text-indigo-600">
+                Register
+              </Link>
+            </p>
           </div>
         </div>
       </div>
