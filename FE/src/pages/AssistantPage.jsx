@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import AppSidebar from "../components/AppSidebar";
-import { messages as mockMessages } from "../data/mockData";
+import UserMenu from "../components/UserMenu";
 
 function formatTime(seconds) {
   if (seconds == null || Number.isNaN(seconds)) return "Now";
@@ -24,65 +24,173 @@ function getSpeakerBadge(name) {
   return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
 }
 
+function extractAssistantText(res) {
+  if (typeof res === "string") return res;
+  if (typeof res?.data === "string") return res.data;
+  if (typeof res?.data?.answer === "string") return res.data.answer;
+  if (typeof res?.answer === "string") return res.answer;
+  return "No answer returned from assistant API.";
+}
+const API_BASE = "https://39k9qcfkh3.execute-api.ap-southeast-2.amazonaws.com";
+function parseTextOrJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function getErrorMessage(text) {
+  try {
+    const parsed = JSON.parse(text);
+    return parsed?.detail?.message || parsed?.message || text;
+  } catch {
+    return text;
+  }
+}
 export default function AssistantPage() {
   const navigate = useNavigate();
+  const { recordingId } = useParams();
 
-  const [messages, setMessages] = useState([]);
+  const [transcriptItems, setTranscriptItems] = useState([]);
+  const [assistantHistory, setAssistantHistory] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    try {
-      setMessages(mockMessages);
-    } catch (err) {
-      console.error(err);
-      setError("Failed to load conversation");
-    } finally {
-      setPageLoading(false);
+  const loadTranscript = async () => {
+    const res = await fetch(
+      `${API_BASE}/api/recordings/${recordingId}/transcript`,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "ngrok-skip-browser-warning": "true",
+        },
+      },
+    );
+
+    const text = await res.text();
+
+    if (!res.ok) {
+      throw new Error(getErrorMessage(text));
     }
-  }, []);
+
+    const data = parseTextOrJson(text);
+    const items = data?.data?.items || data?.items || [];
+    setTranscriptItems(Array.isArray(items) ? items : []);
+  };
+
+  const loadAssistantHistory = async () => {
+    const res = await fetch(
+      `${API_BASE}/api/recordings/${recordingId}/assistant`,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "ngrok-skip-browser-warning": "true",
+        },
+      },
+    );
+
+    const text = await res.text();
+
+    if (!res.ok) {
+      throw new Error(getErrorMessage(text));
+    }
+
+    const data = parseTextOrJson(text);
+    const items = data?.data?.items || data?.items || [];
+    setAssistantHistory(Array.isArray(items) ? items : []);
+  };
+  useEffect(() => {
+    async function loadPage() {
+      if (!recordingId) {
+        setError("Missing recordingId.");
+        setPageLoading(false);
+        return;
+      }
+
+      try {
+        await Promise.all([loadTranscript(), loadAssistantHistory()]);
+      } catch (err) {
+        console.error(err);
+        setError(err.message || "Failed to load assistant page.");
+        window.__toast?.(
+          err.message || "Failed to load assistant page",
+          "error",
+        );
+      } finally {
+        setPageLoading(false);
+      }
+    }
+
+    loadPage();
+  }, [recordingId]);
 
   const firstHumanSpeaker = useMemo(() => {
-    const first = messages.find(
+    const first = transcriptItems.find(
       (msg) =>
         msg.speaker && msg.speaker !== "You" && msg.speaker !== "Assistant",
     );
     return first?.speaker || null;
-  }, [messages]);
-
-  const handleSend = () => {
+  }, [transcriptItems]);
+  const handleSend = async () => {
     const value = input.trim();
-    if (!value || loading) return;
+    if (!value || loading || !recordingId) return;
 
     setLoading(true);
 
-    const userMessage = {
+    const tempUserMessage = {
       id: `local-user-${Date.now()}`,
-      speaker: "You",
-      startSec: null,
-      endSec: null,
-      text: value,
-      tag: null,
+      role: "user",
+      message: value,
     };
 
-    setMessages((prev) => [...prev, userMessage]);
+    setAssistantHistory((prev) => [...prev, tempUserMessage]);
     setInput("");
 
-    setTimeout(() => {
-      const assistantMessage = {
-        id: `local-assistant-${Date.now()}`,
-        speaker: "Assistant",
-        startSec: null,
-        endSec: null,
-        text: "This is a temporary mock reply. Backend API will be connected later.",
-        tag: "MOCK",
-      };
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/recordings/${recordingId}/assistant/query`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "ngrok-skip-browser-warning": "true",
+          },
+          body: JSON.stringify({
+            message: value,
+            includeContext: true,
+          }),
+        },
+      );
 
-      setMessages((prev) => [...prev, assistantMessage]);
+      const text = await res.text();
+
+      if (!res.ok) {
+        throw new Error(getErrorMessage(text));
+      }
+
+      window.__toast?.("Đã gửi câu hỏi cho assistant", "success");
+      await loadAssistantHistory();
+    } catch (err) {
+      console.error(err);
+      window.__toast?.(err.message || "Assistant request failed", "error");
+
+      setAssistantHistory((prev) => [
+        ...prev,
+        {
+          id: `assistant-error-${Date.now()}`,
+          role: "assistant",
+          message: err.message || "Failed to get assistant response.",
+        },
+      ]);
+    } finally {
       setLoading(false);
-    }, 700);
+    }
   };
 
   return (
@@ -105,6 +213,9 @@ export default function AssistantPage() {
                 <p className="text-sm text-slate-500">
                   Transcript and AI conversation view
                 </p>
+                <p className="mt-1 break-all text-xs text-slate-400">
+                  Recording ID: {recordingId}
+                </p>
               </div>
             </div>
           </div>
@@ -122,11 +233,11 @@ export default function AssistantPage() {
               <div className="rounded-xl bg-red-50 p-3 text-sm text-red-600">
                 {error}
               </div>
-            ) : messages.length === 0 ? (
-              <div className="text-sm text-slate-500">No messages yet.</div>
+            ) : transcriptItems.length === 0 ? (
+              <div className="text-sm text-slate-500">No transcript yet.</div>
             ) : (
               <div className="space-y-5">
-                {messages.map((msg) => {
+                {transcriptItems.map((msg, index) => {
                   const isSystemSpeaker =
                     msg.speaker === "You" || msg.speaker === "Assistant";
 
@@ -144,7 +255,7 @@ export default function AssistantPage() {
 
                   return (
                     <div
-                      key={msg.id}
+                      key={msg.id || index}
                       className={`flex gap-3 ${
                         side === "right" ? "justify-end" : "justify-start"
                       }`}
@@ -198,9 +309,7 @@ export default function AssistantPage() {
         <aside className="flex flex-col bg-white p-5">
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold text-slate-900">AI Assistant</h3>
-            <button className="text-slate-400">
-              <i className="bi bi-x-lg" />
-            </button>
+            <UserMenu />
           </div>
 
           <div className="mt-6">
@@ -233,9 +342,29 @@ export default function AssistantPage() {
           </div>
 
           <div className="mt-6 flex-1 space-y-4 overflow-auto">
-            <div className="max-w-[90%] rounded-2xl bg-indigo-50 p-4 text-sm leading-6 text-slate-600">
-              Ask anything about the call to get an AI-generated answer.
-            </div>
+            {assistantHistory.length === 0 ? (
+              <div className="max-w-[90%] rounded-2xl bg-indigo-50 p-4 text-sm leading-6 text-slate-600">
+                Ask anything about the call to get an AI-generated answer.
+              </div>
+            ) : (
+              assistantHistory.map((msg, index) => {
+                const isUser = msg.role === "user" || msg.speaker === "You";
+                const text = msg.message || msg.text || "";
+
+                return (
+                  <div
+                    key={msg.id || index}
+                    className={`max-w-[90%] rounded-2xl p-4 text-sm leading-6 ${
+                      isUser
+                        ? "ml-auto bg-indigo-600 text-white"
+                        : "bg-slate-100 text-slate-700"
+                    }`}
+                  >
+                    {text}
+                  </div>
+                );
+              })
+            )}
 
             {loading && (
               <div className="text-sm text-slate-400">
@@ -243,7 +372,6 @@ export default function AssistantPage() {
               </div>
             )}
           </div>
-
           <div className="mt-4 flex gap-3">
             <input
               type="text"

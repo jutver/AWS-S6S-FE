@@ -10,7 +10,8 @@ export default function UserMenu() {
     const loadUser = async () => {
       try {
         const user = await getCurrentUser();
-        setEmail(user?.signInDetails?.loginId || user?.username || "");
+        const loginId = user?.signInDetails?.loginId || user?.username || "";
+        setEmail(loginId);
       } catch (err) {
         console.error(err);
       }
@@ -42,14 +43,14 @@ export default function UserMenu() {
       window.__toast?.("Đăng xuất thất bại", "error");
     }
   };
-
+  const avatarLetter = email?.trim()?.charAt(0)?.toUpperCase() || "U";
   return (
     <div className="relative" ref={menuRef}>
       <button
         onClick={() => setOpen((prev) => !prev)}
         className="flex h-11 w-11 items-center justify-center rounded-full bg-indigo-600 text-sm font-bold text-white shadow"
       >
-        {email ? email.charAt(0).toUpperCase() : "U"}
+        {avatarLetter}
       </button>
 
       {open && (

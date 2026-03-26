@@ -1,5 +1,5 @@
 import React from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 
 const navItemBase =
   "flex items-center gap-3 rounded-xl px-4 py-3 text-[15px] font-medium transition";
@@ -7,6 +7,29 @@ const navItemIdle = "text-slate-500 hover:bg-slate-100";
 const navItemActive = "bg-indigo-50 text-indigo-600";
 
 export default function AppSidebar() {
+  const navigate = useNavigate();
+  const handleOpenAssistant = () => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("recordings") || "[]");
+
+      if (!saved.length) {
+        window.__toast?.("Chưa có recording nào", "error");
+        return;
+      }
+
+      const latest = saved[0]; // lấy cái mới nhất
+
+      if (!latest?.recordingId) {
+        window.__toast?.("Recording không hợp lệ", "error");
+        return;
+      }
+
+      navigate(`/assistant/${latest.recordingId}`);
+    } catch (err) {
+      console.error(err);
+      window.__toast?.("Không mở được assistant", "error");
+    }
+  };
   return (
     <aside className="hidden md:flex md:w-[250px] flex-col justify-between border-r border-slate-200 bg-white p-5">
       <div>
@@ -43,15 +66,13 @@ export default function AppSidebar() {
             <span>Library</span>
           </NavLink>
 
-          <NavLink
-            to="/assistant"
-            className={({ isActive }) =>
-              `${navItemBase} ${isActive ? navItemActive : navItemIdle}`
-            }
+          <button
+            onClick={handleOpenAssistant}
+            className={`${navItemBase} ${navItemIdle} w-full text-left`}
           >
             <i className="bi bi-stars" />
             <span>AI Assistant</span>
-          </NavLink>
+          </button>
         </nav>
       </div>
 

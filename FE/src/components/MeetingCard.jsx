@@ -41,7 +41,7 @@ export default function MeetingCard({ item }) {
           <p className="mt-2 text-slate-500">
             {item.summaryShort || "No summary available yet."}
           </p>
-
+          <p className="mt-1 text-xs text-slate-400">Audio ID: {item.id}</p>
           <div className="mt-3 flex flex-wrap gap-5 text-sm text-slate-500">
             <span className="flex items-center gap-2">
               <i className="bi bi-calendar3" />

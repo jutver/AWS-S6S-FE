@@ -1,74 +1,347 @@
-import React, { useState } from "react";
-import { fetchAuthSession, getCurrentUser } from "aws-amplify/auth";
+import React, { useEffect, useRef, useState } from "react";
 import UserMenu from "../components/UserMenu";
 import AppSidebar from "../components/AppSidebar";
 import { Link } from "react-router-dom";
-const API_URL =
-  "https://f5p397ic56.execute-api.ap-southeast-1.amazonaws.com/dev/hello";
+import { getAuthToken } from "../utils/auth";
 
+const API_BASE = "https://39k9qcfkh3.execute-api.ap-southeast-2.amazonaws.com";
+const RECORD_UPLOAD_API =
+  "https://f5p397ic56.execute-api.ap-southeast-1.amazonaws.com/dev/record-upload";
 export default function DashboardPage() {
-  const [result, setResult] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const [selectedFile, setSelectedFile] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [userInfo, setUserInfo] = useState(null);
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [stepText, setStepText] = useState("");
+  const [recentItems, setRecentItems] = useState([]);
+  const [uploadInfo, setUploadInfo] = useState(null);
+  const [processResult, setProcessResult] = useState(null);
+  const [statusResult, setStatusResult] = useState(null);
 
-  // const loadCurrentUser = async () => {
-  //   try {
-  //     const user = await getCurrentUser();
-  //     setUserInfo(user);
-  //     window.__toast?.("Đã lấy thông tin người dùng", "success");
-  //   } catch (err) {
-  //     console.error(err);
-  //     setError("Không lấy được thông tin user");
-  //     window.__toast?.("Không lấy được thông tin user", "error");
-  //   }
-  // };
+  const handleBrowseClick = () => {
+    fileInputRef.current?.click();
+  };
 
-  const callApi = async () => {
-    setLoading(true);
+  const handleFileChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setSelectedFile(file);
     setError("");
-    setResult(null);
+    setStepText("");
+    setUploadInfo(null);
+    setProcessResult(null);
+    setStatusResult(null);
+  };
 
-    try {
-      const session = await fetchAuthSession();
-
-      const idToken = session.tokens?.idToken?.toString();
-      const accessToken = session.tokens?.accessToken?.toString();
-      const token = idToken || accessToken;
-
-      if (!token) {
-        throw new Error("Không lấy được token. Hãy đăng nhập lại.");
+  const formatFileSize = (bytes) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+    if (bytes < 1024 * 1024 * 1024) {
+      return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    }
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  };
+  const getAudioDuration = (file) => {
+    return new Promise((resolve, reject) => {
+      if (!file) {
+        reject(new Error("No file provided."));
+        return;
       }
 
-      const res = await fetch(API_URL, {
+      const objectUrl = URL.createObjectURL(file);
+      const audio = new Audio(objectUrl);
+
+      audio.addEventListener("loadedmetadata", () => {
+        resolve(audio.duration);
+        URL.revokeObjectURL(objectUrl);
+      });
+
+      audio.addEventListener("error", () => {
+        reject(new Error("Error reading the audio file."));
+        URL.revokeObjectURL(objectUrl);
+      });
+    });
+  };
+
+  const getAudioFileType = (file) => {
+    if (!file) return "unknown";
+    return file.type || "unknown";
+  };
+
+  const getFileSizeMB = (file) => {
+    if (!file) return 0;
+    return Number((file.size / (1024 * 1024)).toFixed(2));
+  };
+  const createAudioRecord = async ({
+    rawId,
+    fileDisplayName,
+    duration,
+    fileSize,
+    fileType,
+  }) => {
+    const token = await getAuthToken();
+
+    const res = await fetch(RECORD_UPLOAD_API, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        raw_id: rawId,
+        file_display_name: fileDisplayName,
+        duration,
+        file_size: fileSize,
+        file_type: fileType,
+      }),
+    });
+
+    const text = await res.text();
+
+    if (!res.ok) {
+      throw new Error(`Record upload thất bại: HTTP ${res.status} - ${text}`);
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  };
+  const handleUploadAndProcess = async () => {
+    if (!selectedFile) {
+      setError("Vui lòng chọn file trước.");
+      return;
+    }
+
+    if (!selectedFile.type.startsWith("audio/")) {
+      setError("Chỉ được chọn file audio.");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+    setUploadInfo(null);
+    setProcessResult(null);
+    setStatusResult(null);
+
+    try {
+      const token = await getAuthToken();
+      const contentType = selectedFile.type || "application/octet-stream";
+
+      const duration = await getAudioDuration(selectedFile);
+      const fileType = getAudioFileType(selectedFile);
+      const fileSizeMB = getFileSizeMB(selectedFile);
+
+      setStepText("Getting upload URL.");
+
+      const uploadUrlRes = await fetch(
+        `${API_BASE}/api/recordings/upload-url`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            fileName: selectedFile.name,
+            contentType,
+            fileSize: selectedFile.size,
+          }),
+        },
+      );
+
+      const uploadUrlText = await uploadUrlRes.text();
+
+      if (!uploadUrlRes.ok) {
+        throw new Error(
+          `Lấy upload URL thất bại: HTTP ${uploadUrlRes.status} - ${uploadUrlText}`,
+        );
+      }
+
+      let uploadUrlJson;
+      try {
+        uploadUrlJson = JSON.parse(uploadUrlText);
+      } catch {
+        throw new Error("Response upload-url không phải JSON hợp lệ.");
+      }
+
+      const uploadData = uploadUrlJson?.data;
+      const uploadUrl = uploadData?.uploadUrl;
+      const recordingId = uploadData?.recordingId;
+      const transcriptId = uploadData?.transcriptId;
+      const fileUrl = uploadData?.fileUrl;
+
+      if (!uploadUrl || !recordingId || !transcriptId || !fileUrl) {
+        throw new Error("Thiếu dữ liệu cần thiết từ API upload-url.");
+      }
+
+      setUploadInfo(uploadData);
+
+      setStepText(" Uploading file.");
+
+      const s3UploadRes = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": contentType,
+        },
+        body: selectedFile,
+      });
+
+      if (!s3UploadRes.ok) {
+        const s3ErrorText = await s3UploadRes.text();
+        throw new Error(
+          `Upload lên S3 thất bại: HTTP ${s3UploadRes.status} - ${s3ErrorText}`,
+        );
+      }
+
+      setStepText(" Creating record.");
+
+      await createAudioRecord({
+        rawId: recordingId,
+        fileDisplayName: selectedFile.name,
+        duration,
+        fileSize: fileSizeMB,
+        fileType,
+      });
+
+      setStepText("Processing.");
+
+      const processRes = await fetch(
+        `${API_BASE}/api/recordings/${recordingId}/process?transcript_id=${encodeURIComponent(transcriptId)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            fileUrl,
+          }),
+        },
+      );
+
+      const processText = await processRes.text();
+
+      if (!processRes.ok) {
+        throw new Error(
+          `Gọi process thất bại: HTTP ${processRes.status} - ${processText}`,
+        );
+      }
+
+      let processData;
+      try {
+        processData = JSON.parse(processText);
+      } catch {
+        processData = processText;
+      }
+
+      setProcessResult(processData);
+
+      const newItem = {
+        recordingId,
+        transcriptId,
+        fileUrl,
+        fileName: selectedFile.name,
+        fileSize: selectedFile.size,
+        fileSizeMB,
+        duration,
+        fileType,
+        status: processData?.data?.status || "queued",
+        createdAt: new Date().toISOString(),
+      };
+
+      saveRecordingToLocal(newItem);
+      loadRecentItems();
+
+      setStepText("Completed.");
+      window.__toast?.("Upload and process successful", "success");
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "An error occurred");
+      setStepText("");
+      window.__toast?.(err.message || "An error occurred", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+  const saveRecordingToLocal = (item) => {
+    const existing = JSON.parse(localStorage.getItem("recordings") || "[]");
+
+    const updated = [
+      item,
+      ...existing.filter((x) => x.recordingId !== item.recordingId),
+    ];
+
+    localStorage.setItem("recordings", JSON.stringify(updated));
+  };
+  const loadRecentItems = () => {
+    const data = JSON.parse(localStorage.getItem("recordings") || "[]");
+    setRecentItems(data.slice(0, 3));
+  };
+
+  useEffect(() => {
+    loadRecentItems();
+  }, []);
+  const handleCheckStatus = async () => {
+    if (!uploadInfo?.recordingId) {
+      setError("Chưa có recordingId để kiểm tra status.");
+      return;
+    }
+
+    setStatusLoading(true);
+    setError("");
+    setStatusResult(null);
+
+    try {
+      const url = `${API_BASE}/api/recordings/${uploadInfo.recordingId}/status`;
+      console.log("CHECK STATUS URL:", url);
+
+      const res = await fetch(url, {
         method: "GET",
         headers: {
-          Authorization: token,
-          "Content-Type": "application/json",
+          Accept: "application/json",
+          "ngrok-skip-browser-warning": "true",
         },
       });
 
       const text = await res.text();
-      let data;
+      console.log("STATUS HTTP:", res.status);
+      console.log("STATUS RESPONSE:", text);
 
+      if (!res.ok) {
+        throw new Error(`Lấy status thất bại: HTTP ${res.status} - ${text}`);
+      }
+
+      if (
+        text.trim().startsWith("<!DOCTYPE html") ||
+        text.trim().startsWith("<html") ||
+        text.includes("ERR_NGROK_6024") ||
+        text.includes("ngrok-free.dev")
+      ) {
+        throw new Error(
+          "API status đang trả về trang HTML của ngrok, chưa phải JSON.",
+        );
+      }
+
+      let data;
       try {
         data = JSON.parse(text);
       } catch {
-        data = { raw: text };
+        throw new Error("Response status không phải JSON hợp lệ.");
       }
 
-      if (!res.ok) {
-        throw new Error(data.message || `API lỗi ${res.status}`);
-      }
-
-      setResult(data);
-      window.__toast?.("Gọi API thành công", "success");
+      setStatusResult(data);
+      window.__toast?.("Lấy status thành công", "success");
     } catch (err) {
       console.error(err);
-      setError(err.message || "Gọi API thất bại");
-      window.__toast?.(err.message || "Gọi API thất bại", "error");
+      setError(err.message || "Lấy status thất bại");
+      window.__toast?.(err.message || "Lấy status thất bại", "error");
     } finally {
-      setLoading(false);
+      setStatusLoading(false);
     }
   };
 
@@ -97,8 +370,16 @@ export default function DashboardPage() {
               ENGINE READY TO ANALYZE
             </div>
 
-            <div className="grid min-h-[320px] place-items-center rounded-[28px] border-2 border-dashed border-slate-200 bg-white p-8 text-center shadow-sm">
-              <div>
+            <div className="rounded-[28px] border-2 border-dashed border-slate-200 bg-white p-8 shadow-sm">
+              <div className="mx-auto max-w-2xl text-center">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".wav,.mp3,.m4a,audio/*"
+                  className="hidden"
+                  onChange={handleFileChange}
+                />
+
                 <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600">
                   <i className="bi bi-cloud-arrow-up text-2xl" />
                 </div>
@@ -106,63 +387,122 @@ export default function DashboardPage() {
                 <h2 className="text-4xl font-black text-slate-900">
                   Capture the Sound
                 </h2>
+
                 <p className="mx-auto mt-3 max-w-xl leading-7 text-slate-500">
-                  Drag and drop your MP3, WAV, or M4A files here to begin the
-                  transcription and analysis engine.
+                  Chọn file audio, upload lên S3 và gửi yêu cầu xử lý
+                  transcript.
                 </p>
 
+                {selectedFile && (
+                  <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left">
+                    <div className="mb-2 text-sm font-bold text-slate-800">
+                      File đã chọn
+                    </div>
+                    <div className="space-y-1 text-sm text-slate-600">
+                      <div>
+                        <span className="font-semibold">Tên file:</span>{" "}
+                        {selectedFile.name}
+                      </div>
+                      <div>
+                        <span className="font-semibold">Loại:</span>{" "}
+                        {selectedFile.type || "Không xác định"}
+                      </div>
+                      <div>
+                        <span className="font-semibold">Dung lượng:</span>{" "}
+                        {formatFileSize(selectedFile.size)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {stepText && (
+                  <div className="mt-4 rounded-xl bg-blue-50 p-4 text-sm text-blue-700">
+                    {stepText}
+                  </div>
+                )}
+
                 <div className="mt-7 flex flex-wrap justify-center gap-4">
-                  <button className="rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white shadow hover:bg-indigo-700">
+                  <button
+                    onClick={handleBrowseClick}
+                    disabled={loading}
+                    className="rounded-xl bg-indigo-600 px-5 py-3 font-semibold text-white shadow hover:bg-indigo-700 disabled:opacity-60"
+                  >
                     <i className="bi bi-file-earmark-arrow-up mr-2" />
                     Browse Files
+                  </button>
+
+                  <button
+                    onClick={handleUploadAndProcess}
+                    disabled={loading || !selectedFile}
+                    className="rounded-xl bg-slate-200 px-5 py-3 font-semibold text-slate-800 hover:bg-slate-300 disabled:opacity-60"
+                  >
+                    {loading ? "Đang xử lý..." : "Upload & Process"}
+                  </button>
+
+                  <button
+                    onClick={handleCheckStatus}
+                    disabled={statusLoading || !uploadInfo?.recordingId}
+                    className="rounded-xl bg-emerald-100 px-5 py-3 font-semibold text-emerald-700 hover:bg-emerald-200 disabled:opacity-60"
+                  >
+                    {statusLoading ? "Đang kiểm tra..." : "Check Status"}
                   </button>
                 </div>
               </div>
             </div>
 
-            {/* <div className="mt-6 rounded-[24px] border border-slate-200 bg-white p-6 shadow-sm">
-              <h3 className="text-xl font-bold text-slate-900">
-                API & Auth Testing
-              </h3>
-              <p className="mt-2 text-slate-500">
-                Test Cognito current user và API Gateway mock endpoint.
-              </p>
-
-              <div className="mt-6 flex flex-wrap gap-3">
-                <button
-                  onClick={loadCurrentUser}
-                  className="rounded-xl bg-slate-200 px-4 py-3 font-medium text-slate-800 hover:bg-slate-300"
-                >
-                  Xem current user
-                </button>
-
-                <button
-                  onClick={callApi}
-                  disabled={loading}
-                  className="rounded-xl bg-indigo-600 px-4 py-3 font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
-                >
-                  {loading ? "Đang gọi API..." : "Test API Gateway"}
-                </button>
+            {error && (
+              <div className="mt-4 rounded-xl bg-red-50 p-4 text-red-600">
+                {error}
               </div>
+            )}
 
-              {userInfo && (
-                <pre className="mt-4 overflow-auto rounded-xl bg-slate-900 p-4 text-sm text-white">
-                  {JSON.stringify(userInfo, null, 2)}
-                </pre>
-              )}
-
-              {error && (
-                <div className="mt-4 rounded-xl bg-red-50 p-4 text-red-600">
-                  {error}
+            {uploadInfo && (
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h3 className="text-lg font-bold text-slate-900">
+                  Upload Result
+                </h3>
+                <div className="mt-3 space-y-2 text-sm text-slate-700">
+                  <div className="break-all">
+                    <span className="font-semibold">Recording ID:</span>{" "}
+                    {uploadInfo.recordingId}
+                  </div>
+                  <div className="break-all">
+                    <span className="font-semibold">Transcript ID:</span>{" "}
+                    {uploadInfo.transcriptId}
+                  </div>
+                  <div className="break-all">
+                    <span className="font-semibold">File URL:</span>{" "}
+                    {uploadInfo.fileUrl}
+                  </div>
                 </div>
-              )}
+              </div>
+            )}
 
-              {result && (
-                <pre className="mt-4 overflow-auto rounded-xl bg-slate-900 p-4 text-sm text-white">
-                  {JSON.stringify(result, null, 2)}
+            {processResult && (
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h3 className="text-lg font-bold text-slate-900">
+                  Process Result
+                </h3>
+                <pre className="mt-3 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-slate-900 p-4 text-sm text-white">
+                  {typeof processResult === "string"
+                    ? processResult
+                    : JSON.stringify(processResult, null, 2)}
                 </pre>
-              )}
-            </div> */}
+              </div>
+            )}
+
+            {statusResult && (
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h3 className="text-lg font-bold text-slate-900">
+                  Status Result
+                </h3>
+                <pre className="mt-3 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-slate-900 p-4 text-sm text-white">
+                  {typeof statusResult === "string"
+                    ? statusResult
+                    : JSON.stringify(statusResult, null, 2)}
+                </pre>
+              </div>
+            )}
 
             <div className="mt-7 flex items-center justify-between">
               <h3 className="text-xl font-bold text-slate-900">
@@ -172,47 +512,39 @@ export default function DashboardPage() {
                 VIEW LIBRARY →
               </Link>
             </div>
+            <div className="mt-4 grid gap-4">
+              {recentItems.length === 0 ? (
+                <div className="rounded-2xl bg-white p-5 text-slate-500 shadow-sm">
+                  Chưa có insight gần đây.
+                </div>
+              ) : (
+                recentItems.map((item) => (
+                  <div
+                    key={item.recordingId}
+                    className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h4 className="text-base font-bold text-slate-900">
+                          {item.fileName}
+                        </h4>
+                        <p className="mt-1 text-sm text-slate-500">
+                          {new Date(item.createdAt).toLocaleString()}
+                        </p>
+                      </div>
 
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex items-center justify-between">
-                  <div className="text-indigo-600">
-                    <i className="bi bi-file-earmark-text text-lg" />
-                  </div>
-                  <span className="rounded-lg bg-sky-100 px-3 py-1 text-xs font-bold text-sky-600">
-                    READY
-                  </span>
-                </div>
-                <h4 className="mt-4 text-lg font-bold text-slate-900">
-                  Quarterly Strategy Session
-                </h4>
-                <p className="mt-2 text-sm text-slate-500">
-                  Analyzed March 12, 2024 • 42:15
-                </p>
-                <div className="mt-4 h-1.5 rounded-full bg-slate-200">
-                  <div className="h-1.5 w-[75%] rounded-full bg-indigo-600" />
-                </div>
-              </div>
+                      <span className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-600">
+                        {item.status}
+                      </span>
+                    </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex items-center justify-between">
-                  <div className="text-indigo-600">
-                    <i className="bi bi-soundwave text-lg" />
+                    <div className="mt-3 break-all text-sm text-slate-600">
+                      <span className="font-semibold">Recording ID:</span>{" "}
+                      {item.recordingId}
+                    </div>
                   </div>
-                  <span className="rounded-lg bg-slate-100 px-3 py-1 text-xs font-bold text-slate-500">
-                    PROCESSING
-                  </span>
-                </div>
-                <h4 className="mt-4 text-lg font-bold text-slate-900">
-                  User Interview #102
-                </h4>
-                <p className="mt-2 text-sm text-slate-500">
-                  Uploaded just now • 18:04
-                </p>
-                <div className="mt-4 h-1.5 rounded-full bg-slate-200">
-                  <div className="h-1.5 w-[55%] rounded-full bg-indigo-600" />
-                </div>
-              </div>
+                ))
+              )}
             </div>
           </div>
         </div>

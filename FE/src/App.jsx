@@ -39,7 +39,7 @@ export default function App() {
         />
 
         <Route
-          path="/assistant"
+          path="/assistant/:recordingId"
           element={
             <ProtectedRoute>
               <AssistantPage />
