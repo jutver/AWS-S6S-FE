@@ -1,49 +1,102 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { getCurrentUser } from "aws-amplify/auth";
 import { useNavigate } from "react-router-dom";
 import AppSidebar from "../components/AppSidebar";
 import UserMenu from "../components/UserMenu";
+import { getAuthToken } from "../utils/auth";
+
 const API_BASE = "https://39k9qcfkh3.execute-api.ap-southeast-2.amazonaws.com";
+
+function formatDuration(seconds) {
+  if (seconds == null || Number.isNaN(seconds)) return "--:--";
+
+  const total = Math.max(0, Math.floor(seconds));
+  const hrs = Math.floor(total / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+
+  if (hrs > 0) {
+    return `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+function formatDisplayDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+
+  return date.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function getStatusBadgeClass(status) {
+  const normalized = String(status || "").toLowerCase();
+
+  if (normalized === "completed") {
+    return "bg-sky-100 text-sky-700";
+  }
+
+  if (
+    normalized === "processing" ||
+    normalized === "queued" ||
+    normalized === "pending"
+  ) {
+    return "bg-amber-100 text-amber-700";
+  }
+
+  if (normalized === "failed") {
+    return "bg-red-100 text-red-700";
+  }
+
+  return "bg-slate-100 text-slate-600";
+}
+
+function parseTextOrJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function getErrorMessage(text) {
+  try {
+    const parsed = JSON.parse(text);
+    return parsed?.detail?.message || parsed?.message || text;
+  } catch {
+    return text;
+  }
+}
 
 export default function LibraryPage() {
   const navigate = useNavigate();
+
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [userId, setUserId] = useState("");
 
-  const [chatHistory, setChatHistory] = useState({});
-  const [historyLoading, setHistoryLoading] = useState({});
-  const [deleteLoading, setDeleteLoading] = useState({});
-  const [recordingDetails, setRecordingDetails] = useState({});
-  const [transcripts, setTranscripts] = useState({});
-  const [summaries, setSummaries] = useState({});
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const [renameModal, setRenameModal] = useState({
+    open: false,
+    recordingId: "",
+    currentTitle: "",
+    value: "",
+  });
   const [actionLoading, setActionLoading] = useState({});
-  useEffect(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem("recordings") || "[]");
-      setItems(saved);
-    } catch (err) {
-      console.error(err);
-      setError("Không đọc được dữ liệu library từ localStorage.");
-      window.__toast?.(err.message || "can't load library data", "error");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
 
-  const formatFileSize = (bytes) => {
-    if (!bytes && bytes !== 0) return "";
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
-    if (bytes < 1024 * 1024 * 1024) {
-      return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-    }
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  };
   const fetchTextOrJson = async (url, options = {}) => {
+    const token = await getAuthToken();
+
     const res = await fetch(url, {
       ...options,
       headers: {
         Accept: "application/json",
+        Authorization: `Bearer ${token}`,
         "ngrok-skip-browser-warning": "true",
         ...(options.headers || {}),
       },
@@ -52,224 +105,172 @@ export default function LibraryPage() {
     const text = await res.text();
 
     if (!res.ok) {
-      let message = text;
-
-      try {
-        const parsed = JSON.parse(text);
-        message = parsed?.detail?.message || parsed?.message || text;
-      } catch {
-        message = text;
-      }
-
-      throw new Error(message);
+      throw new Error(getErrorMessage(text));
     }
 
-    try {
-      return JSON.parse(text);
-    } catch {
-      return text;
-    }
+    return parseTextOrJson(text);
   };
-  const handleGetHistory = async (recordingId) => {
+
+  const syncLocalRecordings = (serverItems) => {
+    const mapped = serverItems.map((item) => ({
+      recordingId: item.id,
+      fileName: item.fileName || item.title || "Untitled",
+      title: item.title || item.fileName || "Untitled",
+      status: item.status || "unknown",
+      createdAt: item.createdAt,
+      duration: item.durationSec || 0,
+      summaryShort: item.summaryShort || "",
+    }));
+
+    localStorage.setItem("recordings", JSON.stringify(mapped));
+    window.dispatchEvent(new Event("recordings-updated"));
+  };
+
+  const fetchLibrary = async () => {
+    setLoading(true);
     setError("");
-    setHistoryLoading((prev) => ({ ...prev, [recordingId]: true }));
 
     try {
-      const res = await fetch(
-        `${API_BASE}/api/recordings/${recordingId}/assistant`,
-        {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-            "ngrok-skip-browser-warning": "true",
-          },
-        },
+      const currentUser = await getCurrentUser();
+      const resolvedUserId = currentUser.userId || currentUser.username || "";
+      setUserId(resolvedUserId);
+
+      const data = await fetchTextOrJson(
+        `${API_BASE}/api/library?user_id=${encodeURIComponent(resolvedUserId)}&page=1&limit=20`,
+        { method: "GET" },
       );
 
-      const text = await res.text();
+      const serverItems = data?.data?.items || [];
 
-      if (!res.ok) {
-        let message = text;
+      setItems(
+        serverItems.map((item) => ({
+          recordingId: item.id,
+          title: item.title || item.fileName || "Untitled",
+          fileName: item.fileName || item.title || "Untitled",
+          status: item.status || "unknown",
+          createdAt: item.createdAt,
+          duration: item.durationSec || 0,
+          summaryShort: item.summaryShort || "No summary available.",
+        })),
+      );
 
-        try {
-          const parsed = JSON.parse(text);
-          message = parsed?.detail?.message || parsed?.message || text;
-        } catch {}
-
-        throw new Error(message);
-      }
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = text;
-      }
-
-      setChatHistory((prev) => ({
-        ...prev,
-        [recordingId]: data,
-      }));
-      window.__toast?.("Đã tải chat history", "success");
+      syncLocalRecordings(serverItems);
     } catch (err) {
       console.error(err);
-      const message = err.message || "Failed to fetch summary.";
-      setError(message);
-
-      if (window.__toast) {
-        window.__toast(message, "error");
-      } else {
-        alert(message);
-      }
+      setError(err.message || "Không tải được library.");
+      window.__toast?.(err.message || "Không tải được library", "error");
     } finally {
-      setHistoryLoading((prev) => ({ ...prev, [recordingId]: false }));
+      setLoading(false);
     }
   };
 
-  const handleDeleteHistory = async (recordingId) => {
-    setError("");
-    setDeleteLoading((prev) => ({ ...prev, [recordingId]: true }));
+  useEffect(() => {
+    fetchLibrary();
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = () => setOpenMenuId(null);
+    window.addEventListener("click", handleClickOutside);
+    return () => window.removeEventListener("click", handleClickOutside);
+  }, []);
+
+  const sortedItems = useMemo(() => {
+    return [...items].sort((a, b) => {
+      const aTime = new Date(a.createdAt || 0).getTime();
+      const bTime = new Date(b.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
+  }, [items]);
+
+  const openRenameModal = (item) => {
+    setRenameModal({
+      open: true,
+      recordingId: item.recordingId,
+      currentTitle: item.title || item.fileName || "",
+      value: item.title || item.fileName || "",
+    });
+    setOpenMenuId(null);
+  };
+
+  const closeRenameModal = () => {
+    setRenameModal({
+      open: false,
+      recordingId: "",
+      currentTitle: "",
+      value: "",
+    });
+  };
+
+  const handleRenameRecording = async () => {
+    const newTitle = renameModal.value.trim();
+    if (!newTitle) {
+      window.__toast?.("Tên mới không được để trống", "error");
+      return;
+    }
+
+    const recordingId = renameModal.recordingId;
+    if (!recordingId) return;
+
+    setActionLoading((prev) => ({ ...prev, [recordingId]: true }));
 
     try {
-      const res = await fetch(
-        `${API_BASE}/api/recordings/${recordingId}/assistant`,
-        {
-          method: "DELETE",
-          headers: {
-            Accept: "application/json",
-            "ngrok-skip-browser-warning": "true",
-          },
+      await fetchTextOrJson(`${API_BASE}/api/recordings/${recordingId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
         },
-      );
-
-      const text = await res.text();
-
-      if (!res.ok) {
-        let message = text;
-
-        try {
-          const parsed = JSON.parse(text);
-          message = parsed?.detail?.message || parsed?.message || text;
-        } catch {}
-
-        throw new Error(message);
-      }
-
-      setChatHistory((prev) => {
-        const next = { ...prev };
-        delete next[recordingId];
-        return next;
+        body: JSON.stringify({
+          title: newTitle,
+        }),
       });
 
-      window.__toast?.("Đã xóa chat history", "success");
-    } catch (err) {
-      console.error(err);
-      setError(err.message || "Xóa chat history thất bại.");
-      window.__toast?.(err.message || "Failed to delete chat history", "error");
-    } finally {
-      setDeleteLoading((prev) => ({ ...prev, [recordingId]: false }));
-    }
-  };
-  const [renameModal, setRenameModal] = useState({
-    open: false,
-    recordingId: "",
-    currentTitle: "",
-    newTitle: "",
-  });
-  const handleGetRecording = async (recordingId) => {
-    setError("");
-    setActionLoading((prev) => ({ ...prev, [`detail-${recordingId}`]: true }));
-
-    try {
-      const data = await fetchTextOrJson(
-        `${API_BASE}/api/recordings/${recordingId}`,
+      setItems((prev) =>
+        prev.map((item) =>
+          item.recordingId === recordingId
+            ? {
+                ...item,
+                title: newTitle,
+                fileName: newTitle,
+              }
+            : item,
+        ),
       );
 
-      setRecordingDetails((prev) => ({
-        ...prev,
-        [recordingId]: data,
-      }));
-      window.__toast?.("Đã tải recording details", "success");
+      const saved = JSON.parse(localStorage.getItem("recordings") || "[]");
+      const updated = saved.map((item) =>
+        item.recordingId === recordingId
+          ? {
+              ...item,
+              title: newTitle,
+              fileName: newTitle,
+            }
+          : item,
+      );
+      localStorage.setItem("recordings", JSON.stringify(updated));
+      window.dispatchEvent(new Event("recordings-updated"));
+
+      closeRenameModal();
+      window.__toast?.("Đã đổi tên recording", "success");
     } catch (err) {
       console.error(err);
-      setError(err.message || "Failed to fetch recording details.");
-      window.__toast?.(
-        err.message || "Failed to fetch recording details",
-        "error",
-      );
+      window.__toast?.(err.message || "Rename thất bại", "error");
     } finally {
-      setActionLoading((prev) => ({
-        ...prev,
-        [`detail-${recordingId}`]: false,
-      }));
+      setActionLoading((prev) => ({ ...prev, [recordingId]: false }));
     }
   };
-  const handleGetTranscript = async (recordingId) => {
-    setError("");
-    setActionLoading((prev) => ({
-      ...prev,
-      [`transcript-${recordingId}`]: true,
-    }));
 
-    try {
-      const data = await fetchTextOrJson(
-        `${API_BASE}/api/recordings/${recordingId}/transcript`,
-      );
-
-      setTranscripts((prev) => ({
-        ...prev,
-        [recordingId]: data,
-      }));
-      window.__toast?.("Đã tải transcript", "success");
-    } catch (err) {
-      console.error(err);
-      setError(err.message || "Lấy transcript thất bại.");
-      window.__toast?.(err.message || "Failed to fetch transcript", "error");
-    } finally {
-      setActionLoading((prev) => ({
-        ...prev,
-        [`transcript-${recordingId}`]: false,
-      }));
-    }
-  };
-  const handleGetSummary = async (recordingId) => {
-    setError("");
-    setActionLoading((prev) => ({ ...prev, [`summary-${recordingId}`]: true }));
-
-    try {
-      const data = await fetchTextOrJson(
-        `${API_BASE}/api/recordings/${recordingId}/summary`,
-      );
-
-      setSummaries((prev) => ({
-        ...prev,
-        [recordingId]: data,
-      }));
-      window.__toast?.("Đã tải summary", "success");
-    } catch (err) {
-      console.error(err);
-      setError(err.message || "Failed to fetch summary.");
-      window.__toast?.(err.message || "Failed to fetch summary", "error");
-    } finally {
-      setActionLoading((prev) => ({
-        ...prev,
-        [`summary-${recordingId}`]: false,
-      }));
-    }
-  };
   const handleDeleteRecording = async (recordingId) => {
-    setError("");
-    setActionLoading((prev) => ({
-      ...prev,
-      [`delete-recording-${recordingId}`]: true,
-    }));
+    const confirmed = window.confirm(
+      "Bạn có chắc muốn xóa recording này không?",
+    );
+    if (!confirmed) return;
+
+    setActionLoading((prev) => ({ ...prev, [recordingId]: true }));
 
     try {
-      const data = await fetchTextOrJson(
-        `${API_BASE}/api/recordings/${recordingId}`,
-        {
-          method: "DELETE",
-        },
-      );
+      await fetchTextOrJson(`${API_BASE}/api/recordings/${recordingId}`, {
+        method: "DELETE",
+      });
 
       setItems((prev) =>
         prev.filter((item) => item.recordingId !== recordingId),
@@ -278,361 +279,214 @@ export default function LibraryPage() {
       const saved = JSON.parse(localStorage.getItem("recordings") || "[]");
       const updated = saved.filter((item) => item.recordingId !== recordingId);
       localStorage.setItem("recordings", JSON.stringify(updated));
+      window.dispatchEvent(new Event("recordings-updated"));
 
-      window.__toast?.(
-        typeof data === "string" ? data : "Đã xóa recording",
-        "success",
-      );
+      setOpenMenuId(null);
+      window.__toast?.("Đã xóa recording", "success");
     } catch (err) {
       console.error(err);
-      setError(err.message || "Failed to delete recording.");
-      window.__toast?.(err.message || "Failed to delete recording", "error");
+      window.__toast?.(err.message || "Delete thất bại", "error");
     } finally {
-      setActionLoading((prev) => ({
-        ...prev,
-        [`delete-recording-${recordingId}`]: false,
-      }));
+      setActionLoading((prev) => ({ ...prev, [recordingId]: false }));
     }
   };
-  const handleRenameRecording = async () => {
-    const recordingId = renameModal.recordingId;
-    const newTitle = renameModal.newTitle.trim();
 
-    if (!newTitle) {
-      window.__toast?.("Please enter a new title", "error");
-      return;
-    }
-
-    setError("");
-    setActionLoading((prev) => ({ ...prev, [`rename-${recordingId}`]: true }));
-
-    try {
-      const data = await fetchTextOrJson(
-        `${API_BASE}/api/recordings/${recordingId}`,
-        {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            title: newTitle,
-          }),
-        },
-      );
-
-      setItems((prev) =>
-        prev.map((item) =>
-          item.recordingId === recordingId
-            ? { ...item, title: newTitle, fileName: newTitle }
-            : item,
-        ),
-      );
-
-      const saved = JSON.parse(localStorage.getItem("recordings") || "[]");
-      const updated = saved.map((item) =>
-        item.recordingId === recordingId
-          ? { ...item, title: newTitle, fileName: newTitle }
-          : item,
-      );
-      localStorage.setItem("recordings", JSON.stringify(updated));
-
-      window.__toast?.(
-        typeof data === "string" ? data : "Failed to rename recording",
-        "success",
-      );
-
-      closeRenameModal();
-    } catch (err) {
-      console.error(err);
-      setError(err.message || "Failed to rename recording.");
-      window.__toast?.(err.message || "Failed to rename recording", "error");
-    } finally {
-      setActionLoading((prev) => ({
-        ...prev,
-        [`rename-${recordingId}`]: false,
-      }));
-    }
-  };
-  const openRenameModal = (recordingId, currentTitle) => {
-    setRenameModal({
-      open: true,
-      recordingId,
-      currentTitle: currentTitle || "",
-      newTitle: currentTitle || "",
-    });
-  };
-
-  const closeRenameModal = () => {
-    setRenameModal({
-      open: false,
-      recordingId: "",
-      currentTitle: "",
-      newTitle: "",
-    });
-  };
   return (
     <div className="min-h-screen bg-[#f6f7fb] md:grid md:grid-cols-[250px_1fr]">
       <AppSidebar />
 
-      <main className="p-4 md:p-7">
-        <div className="mb-6 flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-extrabold text-slate-900 md:text-4xl">
-              Library
-            </h1>
-            <p className="mt-2 text-slate-500">
-              Your uploaded recordings and their chat history.
-            </p>
+      <main className="min-h-screen px-6 py-7 md:px-10">
+        <div className="mx-auto max-w-7xl">
+          <div className="mb-8 flex items-start justify-between gap-4">
+            <div>
+              <h1 className="text-5xl font-extrabold tracking-tight text-slate-900">
+                Library
+              </h1>
+              <p className="mt-3 text-xl text-slate-500">
+                Your collection of recorded meetings and insights.
+              </p>
+            </div>
+
+            <UserMenu />
           </div>
 
-          <UserMenu />
+          {error && (
+            <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-600">
+              {error}
+            </div>
+          )}
+
+          {loading ? (
+            <div className="rounded-3xl bg-white p-6 text-sm text-slate-500 shadow-sm">
+              Loading library...
+            </div>
+          ) : sortedItems.length === 0 ? (
+            <div className="rounded-3xl bg-white p-6 text-sm text-slate-500 shadow-sm">
+              No recordings yet.
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {sortedItems.map((item) => {
+                const menuOpen = openMenuId === item.recordingId;
+                const busy = !!actionLoading[item.recordingId];
+
+                return (
+                  <div
+                    key={item.recordingId}
+                    className="rounded-[28px] border border-slate-200 bg-white px-6 py-6 shadow-sm transition hover:shadow-md"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex min-w-0 gap-4">
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
+                          <i className="bi bi-mic-fill text-xl" />
+                        </div>
+
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <h3 className="truncate text-2xl font-extrabold text-slate-900">
+                              {item.title}
+                            </h3>
+
+                            <span
+                              className={`inline-flex rounded-full px-3 py-1 text-xs font-bold capitalize ${getStatusBadgeClass(
+                                item.status,
+                              )}`}
+                            >
+                              {item.status}
+                            </span>
+                          </div>
+
+                          <p className="mt-2 line-clamp-1 text-lg text-slate-500">
+                            {item.summaryShort}
+                          </p>
+
+                          <div className="mt-4 flex flex-wrap items-center gap-6 text-sm text-slate-400">
+                            <div className="flex items-center gap-2">
+                              <i className="bi bi-calendar3" />
+                              <span>{formatDisplayDate(item.createdAt)}</span>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <i className="bi bi-clock" />
+                              <span>{formatDuration(item.duration)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="relative shrink-0">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenMenuId((prev) =>
+                              prev === item.recordingId
+                                ? null
+                                : item.recordingId,
+                            );
+                          }}
+                          className="flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50"
+                        >
+                          <i className="bi bi-chevron-down" />
+                        </button>
+
+                        {menuOpen && (
+                          <div
+                            className="absolute right-0 top-14 z-20 w-52 overflow-hidden rounded-2xl border border-slate-200 bg-white py-2 shadow-xl"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              onClick={() =>
+                                navigate(`/assistant/${item.recordingId}`)
+                              }
+                              className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50"
+                            >
+                              <i className="bi bi-stars text-indigo-600" />
+                              <span>Open Assistant</span>
+                            </button>
+
+                            <button
+                              onClick={() => openRenameModal(item)}
+                              disabled={busy}
+                              className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                            >
+                              <i className="bi bi-pencil-square text-amber-600" />
+                              <span>Rename</span>
+                            </button>
+
+                            <button
+                              onClick={() =>
+                                handleDeleteRecording(item.recordingId)
+                              }
+                              disabled={busy}
+                              className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50 disabled:opacity-60"
+                            >
+                              <i className="bi bi-trash3" />
+                              <span>Delete</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
-        {error && (
-          <div className="mt-6 rounded-2xl bg-red-50 p-6 text-sm text-red-600 shadow">
-            {error}
-          </div>
-        )}
-
-        {loading ? (
-          <div className="mt-6 text-sm text-slate-500">Loading...</div>
-        ) : items.length === 0 ? (
-          <div className="mt-6 rounded-2xl bg-white p-6 text-sm text-slate-500 shadow">
-            No recordings yet.
-          </div>
-        ) : (
-          <div className="mt-6 space-y-5">
-            {items.map((item) => (
-              <div
-                key={item.recordingId}
-                className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
-              >
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <h3 className="text-lg font-bold text-slate-900">
-                      {item.fileName}
-                    </h3>
-                    <p className="text-sm text-slate-500">
-                      {formatFileSize(item.fileSize)} •{" "}
-                      {item.createdAt
-                        ? new Date(item.createdAt).toLocaleString()
-                        : ""}
-                    </p>
-                  </div>
-
-                  <span className="inline-flex w-fit rounded-full bg-indigo-50 px-3 py-1 text-xs font-bold text-indigo-600">
-                    {item.status || "unknown"}
-                  </span>
-                </div>
-
-                <div className="mt-4 space-y-2 text-sm text-slate-700">
-                  <div className="break-all">
-                    <span className="font-semibold">Recording ID:</span>{" "}
-                    {item.recordingId}
-                  </div>
-                  <div className="break-all">
-                    <span className="font-semibold">Transcript ID:</span>{" "}
-                    {item.transcriptId}
-                  </div>
-                  <div className="break-all">
-                    <span className="font-semibold">File URL:</span>{" "}
-                    {item.fileUrl}
-                  </div>
-                </div>
-                <div className="mt-4 flex flex-wrap gap-3">
-                  <button
-                    onClick={() => handleGetRecording(item.recordingId)}
-                    disabled={actionLoading[`detail-${item.recordingId}`]}
-                    className="rounded-xl bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-300 disabled:opacity-60"
-                  >
-                    {actionLoading[`detail-${item.recordingId}`]
-                      ? "Đang tải..."
-                      : "View Details"}
-                  </button>
-
-                  <button
-                    onClick={() => handleGetTranscript(item.recordingId)}
-                    disabled={actionLoading[`transcript-${item.recordingId}`]}
-                    className="rounded-xl bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-300 disabled:opacity-60"
-                  >
-                    {actionLoading[`transcript-${item.recordingId}`]
-                      ? "Đang tải..."
-                      : "Transcript"}
-                  </button>
-
-                  <button
-                    onClick={() => handleGetSummary(item.recordingId)}
-                    disabled={actionLoading[`summary-${item.recordingId}`]}
-                    className="rounded-xl bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-300 disabled:opacity-60"
-                  >
-                    {actionLoading[`summary-${item.recordingId}`]
-                      ? "Đang tải..."
-                      : "Summary"}
-                  </button>
-
-                  <button
-                    onClick={() => handleGetHistory(item.recordingId)}
-                    disabled={historyLoading[item.recordingId]}
-                    className="rounded-xl bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-300 disabled:opacity-60"
-                  >
-                    {historyLoading[item.recordingId]
-                      ? "Đang tải..."
-                      : "Chat History"}
-                  </button>
-
-                  <button
-                    onClick={() =>
-                      openRenameModal(
-                        item.recordingId,
-                        item.title || item.fileName,
-                      )
-                    }
-                    disabled={actionLoading[`rename-${item.recordingId}`]}
-                    className="rounded-xl bg-amber-100 px-4 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-200 disabled:opacity-60"
-                  >
-                    {actionLoading[`rename-${item.recordingId}`]
-                      ? "Đang đổi..."
-                      : "Rename"}
-                  </button>
-                  <button
-                    onClick={() => handleDeleteHistory(item.recordingId)}
-                    disabled={deleteLoading[item.recordingId]}
-                    className="rounded-xl bg-red-100 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-200 disabled:opacity-60"
-                  >
-                    {deleteLoading[item.recordingId]
-                      ? "Đang xóa..."
-                      : "Clear Chat History"}
-                  </button>
-
-                  <button
-                    onClick={() => handleDeleteRecording(item.recordingId)}
-                    disabled={
-                      actionLoading[`delete-recording-${item.recordingId}`]
-                    }
-                    className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-60"
-                  >
-                    {actionLoading[`delete-recording-${item.recordingId}`]
-                      ? "Đang xóa..."
-                      : "Delete Recording"}
-                  </button>
-                </div>
-
-                {chatHistory[item.recordingId] !== undefined && (
-                  <div className="mt-4 rounded-xl bg-slate-900 p-4 text-white">
-                    <div className="mb-2 text-sm font-bold">Chat History</div>
-                    <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words text-sm">
-                      {typeof chatHistory[item.recordingId] === "string"
-                        ? chatHistory[item.recordingId]
-                        : JSON.stringify(
-                            chatHistory[item.recordingId],
-                            null,
-                            2,
-                          )}
-                    </pre>
-                  </div>
-                )}
-                <button
-                  onClick={() => navigate(`/assistant/${item.recordingId}`)}
-                  className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
-                >
-                  Open Assistant
-                </button>
-                {recordingDetails[item.recordingId] !== undefined && (
-                  <div className="mt-4 rounded-xl bg-slate-900 p-4 text-white">
-                    <div className="mb-2 text-sm font-bold">
-                      Recording Details
-                    </div>
-                    <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words text-sm">
-                      {typeof recordingDetails[item.recordingId] === "string"
-                        ? recordingDetails[item.recordingId]
-                        : JSON.stringify(
-                            recordingDetails[item.recordingId],
-                            null,
-                            2,
-                          )}
-                    </pre>
-                  </div>
-                )}
-
-                {transcripts[item.recordingId] !== undefined && (
-                  <div className="mt-4 rounded-xl bg-slate-900 p-4 text-white">
-                    <div className="mb-2 text-sm font-bold">Transcript</div>
-                    <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words text-sm">
-                      {typeof transcripts[item.recordingId] === "string"
-                        ? transcripts[item.recordingId]
-                        : JSON.stringify(
-                            transcripts[item.recordingId],
-                            null,
-                            2,
-                          )}
-                    </pre>
-                  </div>
-                )}
-
-                {summaries[item.recordingId] !== undefined && (
-                  <div className="mt-4 rounded-xl bg-slate-900 p-4 text-white">
-                    <div className="mb-2 text-sm font-bold">Summary</div>
-                    <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words text-sm">
-                      {typeof summaries[item.recordingId] === "string"
-                        ? summaries[item.recordingId]
-                        : JSON.stringify(summaries[item.recordingId], null, 2)}
-                    </pre>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
         {renameModal.open && (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4"
             onClick={closeRenameModal}
           >
             <div
-              className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
+              className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-xl font-bold text-slate-900">
-                Rename Recording
+                Rename recording
               </h3>
+
               <p className="mt-2 text-sm text-slate-500">
-                Nhập tên mới cho recording này.
+                Enter a new title for this recording.
               </p>
 
-              <div className="mt-4">
-                <label className="mb-2 block text-sm font-semibold text-slate-700">
-                  New title
-                </label>
-                <input
-                  type="text"
-                  value={renameModal.newTitle}
-                  onChange={(e) =>
-                    setRenameModal((prev) => ({
-                      ...prev,
-                      newTitle: e.target.value,
-                    }))
+              <input
+                type="text"
+                value={renameModal.value}
+                onChange={(e) =>
+                  setRenameModal((prev) => ({
+                    ...prev,
+                    value: e.target.value,
+                  }))
+                }
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    handleRenameRecording();
                   }
-                  className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-indigo-500"
-                  placeholder="Nhập tên mới..."
-                />
-              </div>
+                }}
+                className="mt-5 h-12 w-full rounded-2xl border border-slate-200 px-4 outline-none"
+                placeholder="Enter new title"
+                autoFocus
+              />
 
               <div className="mt-6 flex justify-end gap-3">
                 <button
                   onClick={closeRenameModal}
-                  className="rounded-xl bg-slate-200 px-4 py-2 font-semibold text-slate-700 hover:bg-slate-300"
+                  className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
                 >
                   Cancel
                 </button>
 
                 <button
                   onClick={handleRenameRecording}
-                  disabled={actionLoading[`rename-${renameModal.recordingId}`]}
-                  className="rounded-xl bg-indigo-600 px-4 py-2 font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                  disabled={
+                    !!actionLoading[renameModal.recordingId] ||
+                    !renameModal.value.trim()
+                  }
+                  className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
-                  {actionLoading[`rename-${renameModal.recordingId}`]
-                    ? "Saving..."
-                    : "Save"}
+                  Save
                 </button>
               </div>
             </div>

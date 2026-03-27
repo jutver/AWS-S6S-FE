@@ -3,13 +3,12 @@ import UserMenu from "../components/UserMenu";
 import AppSidebar from "../components/AppSidebar";
 import { Link } from "react-router-dom";
 import { getAuthToken } from "../utils/auth";
-
+import { getCurrentUser } from "aws-amplify/auth";
 const API_BASE = "https://39k9qcfkh3.execute-api.ap-southeast-2.amazonaws.com";
-const RECORD_UPLOAD_API =
-  "https://f5p397ic56.execute-api.ap-southeast-1.amazonaws.com/dev/record-upload";
+
 export default function DashboardPage() {
   const fileInputRef = useRef(null);
-
+  const [userId, setUserId] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -23,7 +22,19 @@ export default function DashboardPage() {
   const handleBrowseClick = () => {
     fileInputRef.current?.click();
   };
+  useEffect(() => {
+    const loadUser = async () => {
+      try {
+        const user = await getCurrentUser();
+        setUserId(user.userId || user.username || "");
+      } catch (err) {
+        console.error(err);
+      }
+    };
 
+    loadUser();
+    loadRecentItems();
+  }, []);
   const handleFileChange = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -75,42 +86,7 @@ export default function DashboardPage() {
     if (!file) return 0;
     return Number((file.size / (1024 * 1024)).toFixed(2));
   };
-  const createAudioRecord = async ({
-    rawId,
-    fileDisplayName,
-    duration,
-    fileSize,
-    fileType,
-  }) => {
-    const token = await getAuthToken();
 
-    const res = await fetch(RECORD_UPLOAD_API, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        raw_id: rawId,
-        file_display_name: fileDisplayName,
-        duration,
-        file_size: fileSize,
-        file_type: fileType,
-      }),
-    });
-
-    const text = await res.text();
-
-    if (!res.ok) {
-      throw new Error(`Record upload thất bại: HTTP ${res.status} - ${text}`);
-    }
-
-    try {
-      return JSON.parse(text);
-    } catch {
-      return text;
-    }
-  };
   const handleUploadAndProcess = async () => {
     if (!selectedFile) {
       setError("Vui lòng chọn file trước.");
@@ -119,6 +95,13 @@ export default function DashboardPage() {
 
     if (!selectedFile.type.startsWith("audio/")) {
       setError("Chỉ được chọn file audio.");
+      return;
+    }
+
+    if (!userId) {
+      setError(
+        "Chưa lấy được userId. Vui lòng thử lại sau khi đăng nhập xong.",
+      );
       return;
     }
 
@@ -133,13 +116,14 @@ export default function DashboardPage() {
       const contentType = selectedFile.type || "application/octet-stream";
 
       const duration = await getAudioDuration(selectedFile);
+      const durationSec = Math.round(duration);
       const fileType = getAudioFileType(selectedFile);
       const fileSizeMB = getFileSizeMB(selectedFile);
 
       setStepText("Getting upload URL.");
 
       const uploadUrlRes = await fetch(
-        `${API_BASE}/api/recordings/upload-url`,
+        `${API_BASE}/api/recordings/upload-url?user_id=${encodeURIComponent(userId)}`,
         {
           method: "POST",
           headers: {
@@ -150,6 +134,7 @@ export default function DashboardPage() {
             fileName: selectedFile.name,
             contentType,
             fileSize: selectedFile.size,
+            durationSec,
           }),
         },
       );
@@ -172,16 +157,16 @@ export default function DashboardPage() {
       const uploadData = uploadUrlJson?.data;
       const uploadUrl = uploadData?.uploadUrl;
       const recordingId = uploadData?.recordingId;
-      const transcriptId = uploadData?.transcriptId;
+      const transcriptId = uploadData?.transcriptId || null;
       const fileUrl = uploadData?.fileUrl;
 
-      if (!uploadUrl || !recordingId || !transcriptId || !fileUrl) {
+      if (!uploadUrl || !recordingId || !fileUrl) {
         throw new Error("Thiếu dữ liệu cần thiết từ API upload-url.");
       }
 
       setUploadInfo(uploadData);
 
-      setStepText(" Uploading file.");
+      setStepText("Uploading file.");
 
       const s3UploadRes = await fetch(uploadUrl, {
         method: "PUT",
@@ -198,31 +183,22 @@ export default function DashboardPage() {
         );
       }
 
-      setStepText(" Creating record.");
-
-      await createAudioRecord({
-        rawId: recordingId,
-        fileDisplayName: selectedFile.name,
-        duration,
-        fileSize: fileSizeMB,
-        fileType,
-      });
-
       setStepText("Processing.");
 
-      const processRes = await fetch(
-        `${API_BASE}/api/recordings/${recordingId}/process?transcript_id=${encodeURIComponent(transcriptId)}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            fileUrl,
-          }),
+      const processUrl = transcriptId
+        ? `${API_BASE}/api/recordings/${recordingId}/process?transcript_id=${encodeURIComponent(transcriptId)}`
+        : `${API_BASE}/api/recordings/${recordingId}/process`;
+
+      const processRes = await fetch(processUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
-      );
+        body: JSON.stringify({
+          fileUrl,
+        }),
+      });
 
       const processText = await processRes.text();
 
@@ -257,13 +233,13 @@ export default function DashboardPage() {
       saveRecordingToLocal(newItem);
       loadRecentItems();
 
-      setStepText("Completed.");
-      window.__toast?.("Upload and process successful", "success");
+      setStepText("Hoàn tất: upload S3 và process thành công.");
+      window.__toast?.("Upload và process thành công", "success");
     } catch (err) {
       console.error(err);
-      setError(err.message || "An error occurred");
+      setError(err.message || "Có lỗi xảy ra");
       setStepText("");
-      window.__toast?.(err.message || "An error occurred", "error");
+      window.__toast?.(err.message || "Có lỗi xảy ra", "error");
     } finally {
       setLoading(false);
     }
@@ -277,73 +253,20 @@ export default function DashboardPage() {
     ];
 
     localStorage.setItem("recordings", JSON.stringify(updated));
+    window.dispatchEvent(new Event("recordings-updated"));
   };
   const loadRecentItems = () => {
     const data = JSON.parse(localStorage.getItem("recordings") || "[]");
     setRecentItems(data.slice(0, 3));
   };
-
   useEffect(() => {
-    loadRecentItems();
+    const syncRecent = () => {
+      loadRecentItems();
+    };
+
+    window.addEventListener("recordings-updated", syncRecent);
+    return () => window.removeEventListener("recordings-updated", syncRecent);
   }, []);
-  const handleCheckStatus = async () => {
-    if (!uploadInfo?.recordingId) {
-      setError("Chưa có recordingId để kiểm tra status.");
-      return;
-    }
-
-    setStatusLoading(true);
-    setError("");
-    setStatusResult(null);
-
-    try {
-      const url = `${API_BASE}/api/recordings/${uploadInfo.recordingId}/status`;
-      console.log("CHECK STATUS URL:", url);
-
-      const res = await fetch(url, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          "ngrok-skip-browser-warning": "true",
-        },
-      });
-
-      const text = await res.text();
-      console.log("STATUS HTTP:", res.status);
-      console.log("STATUS RESPONSE:", text);
-
-      if (!res.ok) {
-        throw new Error(`Lấy status thất bại: HTTP ${res.status} - ${text}`);
-      }
-
-      if (
-        text.trim().startsWith("<!DOCTYPE html") ||
-        text.trim().startsWith("<html") ||
-        text.includes("ERR_NGROK_6024") ||
-        text.includes("ngrok-free.dev")
-      ) {
-        throw new Error(
-          "API status đang trả về trang HTML của ngrok, chưa phải JSON.",
-        );
-      }
-
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        throw new Error("Response status không phải JSON hợp lệ.");
-      }
-
-      setStatusResult(data);
-      window.__toast?.("Lấy status thành công", "success");
-    } catch (err) {
-      console.error(err);
-      setError(err.message || "Lấy status thất bại");
-      window.__toast?.(err.message || "Lấy status thất bại", "error");
-    } finally {
-      setStatusLoading(false);
-    }
-  };
 
   return (
     <div className="min-h-screen bg-[#f6f7fb] md:grid md:grid-cols-[250px_1fr]">
@@ -438,14 +361,6 @@ export default function DashboardPage() {
                   >
                     {loading ? "Đang xử lý..." : "Upload & Process"}
                   </button>
-
-                  <button
-                    onClick={handleCheckStatus}
-                    disabled={statusLoading || !uploadInfo?.recordingId}
-                    className="rounded-xl bg-emerald-100 px-5 py-3 font-semibold text-emerald-700 hover:bg-emerald-200 disabled:opacity-60"
-                  >
-                    {statusLoading ? "Đang kiểm tra..." : "Check Status"}
-                  </button>
                 </div>
               </div>
             </div>
@@ -453,41 +368,6 @@ export default function DashboardPage() {
             {error && (
               <div className="mt-4 rounded-xl bg-red-50 p-4 text-red-600">
                 {error}
-              </div>
-            )}
-
-            {uploadInfo && (
-              <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h3 className="text-lg font-bold text-slate-900">
-                  Upload Result
-                </h3>
-                <div className="mt-3 space-y-2 text-sm text-slate-700">
-                  <div className="break-all">
-                    <span className="font-semibold">Recording ID:</span>{" "}
-                    {uploadInfo.recordingId}
-                  </div>
-                  <div className="break-all">
-                    <span className="font-semibold">Transcript ID:</span>{" "}
-                    {uploadInfo.transcriptId}
-                  </div>
-                  <div className="break-all">
-                    <span className="font-semibold">File URL:</span>{" "}
-                    {uploadInfo.fileUrl}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {processResult && (
-              <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h3 className="text-lg font-bold text-slate-900">
-                  Process Result
-                </h3>
-                <pre className="mt-3 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-slate-900 p-4 text-sm text-white">
-                  {typeof processResult === "string"
-                    ? processResult
-                    : JSON.stringify(processResult, null, 2)}
-                </pre>
               </div>
             )}
 
