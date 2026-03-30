@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { getCurrentUser, signOut } from "aws-amplify/auth";
 const navItemBase =
@@ -35,16 +35,7 @@ export default function AppSidebar() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (accountRef.current && !accountRef.current.contains(e.target)) {
-        setOpenAccount(false);
-      }
-    };
 
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
   useEffect(() => {
     const loadCount = () => {
       const data = JSON.parse(localStorage.getItem("recordings") || "[]");
@@ -92,8 +83,8 @@ export default function AppSidebar() {
   };
 
   return (
-    <aside className="hidden md:flex md:w-[250px] flex-col border-r border-slate-200 bg-[#f6f7fb]">
-      <div className="p-5">
+    <aside className="hidden md:sticky md:top-0 md:flex md:h-screen md:w-[250px] flex-col border-r border-slate-200 bg-[#f6f7fb]">
+      <div className="flex-1 p-5">
         <div className="mb-8 flex items-center gap-3 px-2">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#5B4CF5] text-white">
             <i className="bi bi-record-circle text-lg" />
@@ -156,26 +147,27 @@ export default function AppSidebar() {
           className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-slate-100"
         >
           <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#5B4CF5] text-sm font-bold text-white">
-            K
+            {email?.trim()?.charAt(0)?.toUpperCase() || "U"}
           </div>
           <span className="text-sm font-medium text-slate-700">Account</span>
         </button>
-      </div>
-      {openAccount && (
-        <div className="absolute bottom-16 left-4 z-50 w-[220px] rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
-          <p className="text-xs text-slate-400">Signed in as</p>
-          <p className="mt-1 break-all text-sm text-slate-700">
-            {email || "Unknown"}
-          </p>
 
-          <button
-            onClick={handleLogout}
-            className="mt-3 w-full rounded-xl bg-red-500 px-4 py-2 text-sm font-semibold text-white hover:bg-red-600"
-          >
-            Logout
-          </button>
-        </div>
-      )}
+        {openAccount && (
+          <div className="absolute bottom-16 left-4 z-50 w-[220px] rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
+            <p className="text-xs text-slate-400">Signed in as</p>
+            <p className="mt-1 break-all text-sm text-slate-700">
+              {email || "Unknown"}
+            </p>
+
+            <button
+              onClick={handleLogout}
+              className="mt-3 w-full rounded-xl bg-red-500 px-4 py-2 text-sm font-semibold text-white hover:bg-red-600"
+            >
+              Logout
+            </button>
+          </div>
+        )}
+      </div>
     </aside>
   );
 }
