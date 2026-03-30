@@ -5,7 +5,7 @@ import AppSidebar from "../components/AppSidebar";
 
 import { getAuthToken } from "../utils/auth";
 import PageTransition from "../components/PageTransition";
-const API_BASE = "https://1hf3sfyu6g.execute-api.ap-southeast-2.amazonaws.com/";
+const API_BASE = "https://ipiizwxzu2.execute-api.ap-southeast-1.amazonaws.com/dev";
 
 function formatDuration(seconds) {
   if (seconds == null || Number.isNaN(seconds)) return "--:--";
@@ -151,8 +151,8 @@ export default function LibraryPage() {
             item.status === "pending" || item.status === "processing"
               ? "Đang xử lý transcript — thường mất 2–5 phút."
               : (item.summaryShort || "No summary available.")
-                  .replace(/<think>[\s\S]*?<\/think>/gi, "")
-                  .trim(),
+                .replace(/<think>[\s\S]*?<\/think>/gi, "")
+                .trim(),
         })),
       );
 
@@ -244,10 +244,10 @@ export default function LibraryPage() {
         prev.map((item) =>
           item.recordingId === recordingId
             ? {
-                ...item,
-                title: newTitle,
-                fileName: newTitle,
-              }
+              ...item,
+              title: newTitle,
+              fileName: newTitle,
+            }
             : item,
         ),
       );
@@ -256,10 +256,10 @@ export default function LibraryPage() {
       const updated = saved.map((item) =>
         item.recordingId === recordingId
           ? {
-              ...item,
-              title: newTitle,
-              fileName: newTitle,
-            }
+            ...item,
+            title: newTitle,
+            fileName: newTitle,
+          }
           : item,
       );
       localStorage.setItem("recordings", JSON.stringify(updated));
@@ -352,11 +352,10 @@ export default function LibraryPage() {
                   <button
                     key={chip.key}
                     onClick={() => setStatusFilter(chip.key)}
-                    className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                      statusFilter === chip.key
+                    className={`rounded-full px-4 py-2 text-sm font-medium transition ${statusFilter === chip.key
                         ? "bg-indigo-100 text-[#5B4CF5]"
                         : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                    }`}
+                      }`}
                   >
                     {chip.label}
                   </button>
@@ -405,13 +404,12 @@ export default function LibraryPage() {
 
                               <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
                                 <span
-                                  className={`h-1.5 w-1.5 rounded-full ${
-                                    item.status === "completed"
+                                  className={`h-1.5 w-1.5 rounded-full ${item.status === "completed"
                                       ? "bg-emerald-500"
                                       : item.status === "failed"
                                         ? "bg-red-500"
                                         : "bg-amber-500"
-                                  }`}
+                                    }`}
                                 />
                                 {item.status?.charAt(0).toUpperCase() +
                                   item.status?.slice(1)}
