@@ -165,7 +165,7 @@ export default function DashboardPage() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
+            Authorization: `${token}`,
           },
           body: JSON.stringify({
             fileName: selectedFile.name,
@@ -336,8 +336,8 @@ export default function DashboardPage() {
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
                 className={`rounded-[24px] border border-dashed bg-white px-6 py-8 shadow-sm transition-all duration-200 ${dragActive
-                    ? "border-[#5B4CF5] bg-indigo-50/40 shadow-md"
-                    : "border-slate-200"
+                  ? "border-[#5B4CF5] bg-indigo-50/40 shadow-md"
+                  : "border-slate-200"
                   }`}
               >
                 <div className="mx-auto max-w-3xl text-center">
@@ -478,10 +478,10 @@ export default function DashboardPage() {
                         <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">
                           <span
                             className={`h-1.5 w-1.5 rounded-full ${String(item.status).toLowerCase() === "completed"
-                                ? "bg-emerald-500"
-                                : String(item.status).toLowerCase() === "failed"
-                                  ? "bg-red-500"
-                                  : "bg-amber-500"
+                              ? "bg-emerald-500"
+                              : String(item.status).toLowerCase() === "failed"
+                                ? "bg-red-500"
+                                : "bg-amber-500"
                               }`}
                           />
                           {formatStatus(item.status)}
