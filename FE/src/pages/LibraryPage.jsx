@@ -95,7 +95,6 @@ export default function LibraryPage() {
       headers: {
         Accept: "application/json",
         Authorization: `${token}`,
-        "ngrok-skip-browser-warning": "true",
         ...(options.headers || {}),
       },
     });
