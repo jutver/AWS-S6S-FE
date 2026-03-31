@@ -160,7 +160,7 @@ export default function DashboardPage() {
       setStepText("Getting upload URL.");
 
       const uploadUrlRes = await fetch(
-        `${API_BASE}/api/recordings/upload-url?user_id=${encodeURIComponent(userId)}`,
+        `${API_BASE}/api/upload-url?user_id=${encodeURIComponent(userId)}`,
         {
           method: "POST",
           headers: {
@@ -242,8 +242,8 @@ export default function DashboardPage() {
       saveRecordingToLocal(newItem);
       loadRecentItems();
 
-      setStepText(" upload  và process thành công.");
-      window.__toast?.("Upload và process thành công", "success");
+      setStepText("Upload thành công.");
+      window.__toast?.("Upload thành công", "success");
     } catch (err) {
       console.error(err);
       setError(err.message || "Có lỗi xảy ra");
